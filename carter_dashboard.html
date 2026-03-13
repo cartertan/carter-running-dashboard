@@ -405,68 +405,100 @@ function Nutrition({ data, save }) {
 }
 
 function AICoach({ data }) {
-  const [msgs, setMsgs] = useState([{role:"assistant",text:"Hey Carter! Your Strava data is loaded — 331 runs and nearly 2,000 km since Sep 2024. Ask me anything about your training, pacing, recovery, or your path to sub-1:50."}]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const endRef = useRef(null);
-
-  useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[msgs]);
-
   const { runs } = data;
   const totalKm = runs.reduce((s,r)=>s+Number(r.distance||0),0);
   const weekKm = runs.filter(r=>(new Date()-new Date(r.date))/864e5<=7).reduce((s,r)=>s+Number(r.distance||0),0);
+  const monthKm = runs.filter(r=>(new Date()-new Date(r.date))/864e5<=30).reduce((s,r)=>s+Number(r.distance||0),0);
   const paces = runs.filter(r=>r.pace&&Number(r.distance)>=5);
   const avgPaceSec = paces.length ? paces.reduce((s,r)=>s+paceToSec(r.pace),0)/paces.length : null;
   const recent5 = [...runs].reverse().slice(0,5);
+  const longest = runs.reduce((best,r)=>Number(r.distance)>Number(best.distance)?r:best, runs[0]||{});
+  const bestPace = runs.filter(r=>r.pace&&Number(r.distance)>=1).reduce((best,r)=>paceToSec(r.pace)<paceToSec(best.pace)?r:best, runs.find(r=>r.pace&&Number(r.distance)>=1)||{});
 
-  async function send() {
-    if (!input.trim()||loading) return;
-    const userMsg=input.trim(); setInput("");
-    setMsgs(m=>[...m,{role:"user",text:userMsg}]); setLoading(true);
-
-    const context = `Athlete: Carter Tan, 45, Singapore. VO2max ~48-50, MaxHR ~186bpm, LT pace ~5:10/km, Zone2 HR 135-148bpm.
-Goals: Sub-1:50 HM (stretch 1:45, long-term 1:30), 2.4km <10:30.
-Weekly volume: 60-90km. Uses Norwegian 4x4, cruise intervals, 30km LSDs.
-Strava data: ${runs.length} runs, ${totalKm.toFixed(0)}km total since Sep 2024.
-This week: ${weekKm.toFixed(1)}km.
-Avg pace (runs ≥5km): ${avgPaceSec ? secToPace(avgPaceSec) : "N/A"} /km.
-Recent runs: ${JSON.stringify(recent5)}.
-Recovery: cold plunge, sauna, Garmin HRV tracking. Singapore heat is a factor.`;
-
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:1000,
-          system:`You are Carter Tan's professional endurance running coach. He is a data-driven athlete with nearly 2000km of Strava data. Provide specific, evidence-based coaching advice. Be direct and concise. Reference his data when useful. Context: ${context}`,
-          messages:msgs.filter((_,i)=>i>0).concat([{role:"user",content:userMsg}]).map(m=>({role:m.role==="user"?"user":"assistant",content:m.text}))
-        })
-      });
-      const d=await res.json();
-      setMsgs(m=>[...m,{role:"assistant",text:d.content?.[0]?.text||"No response."}]);
-    } catch(e) { setMsgs(m=>[...m,{role:"assistant",text:"Network error. Please try again."}]); }
-    setLoading(false);
+  function openClaude(prompt) {
+    const url = "https://claude.ai/new?q=" + encodeURIComponent(prompt);
+    window.open(url, "_blank");
   }
 
-  const suggestions=["What does my pace trend say?","Am I on track for sub-1:50?","Analyze my weekly volume","Plan next week's training"];
+  function buildContext() {
+    return `I'm Carter Tan, 45, Singapore-based endurance runner. Here's my current training snapshot:
 
-  return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:500}},
-    React.createElement("div",{style:{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:10,paddingBottom:8}},
-      msgs.map((m,i)=>React.createElement("div",{key:i,style:{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}},
-        React.createElement("div",{style:{maxWidth:"82%",padding:"10px 14px",borderRadius:12,fontSize:13,lineHeight:1.6,
-          background:m.role==="user"?C.accent+"20":"#1e1e1e",
-          color:m.role==="user"?C.accent:C.text,
-          border:`1px solid ${m.role==="user"?C.accent+"40":C.border}`,whiteSpace:"pre-wrap"}},m.text)
-      )),
-      loading&&React.createElement("div",{style:{display:"flex"}},React.createElement("div",{style:{padding:"10px 14px",background:"#1e1e1e",borderRadius:12,fontSize:13,color:C.muted,border:`1px solid ${C.border}`}},"Thinking…")),
-      React.createElement("div",{ref:endRef})
+PHYSIOLOGY: VO2max ~48-50, MaxHR ~186bpm, Lactate Threshold ~5:10/km, Zone 2 HR 135-148bpm, RHR ~51-57bpm
+GOALS: Sub-1:50 HM (stretch 1:45, long-term 1:30), 2.4km run <10:30
+WEEKLY VOLUME: 60-90km/week. Norwegian 4x4, cruise intervals, 30km LSDs
+STRAVA STATS: ${runs.length} runs | ${totalKm.toFixed(0)}km total (Sep 2024–now) | This week: ${weekKm.toFixed(1)}km | This month: ${monthKm.toFixed(1)}km
+AVG PACE (runs ≥5km): ${avgPaceSec ? secToPace(avgPaceSec) : "N/A"}/km | Best pace: ${bestPace.pace||"N/A"}/km | Longest: ${longest.distance||0}km
+RECENT 5 RUNS: ${recent5.map(r=>`${r.date} ${r.distance}km @ ${r.pace}/km${r.hr?" HR:"+r.hr:""}${r.notes?" ("+r.notes+")":""}`).join(" | ")}
+RECOVERY: Cold plunge, sauna cycles, Garmin HRV, creatine, protein. Singapore humidity is a key factor.
+SHOES: ASICS Superblast 3, ASICS Megablast
+
+`;
+  }
+
+  const quickPrompts = [
+    { label: "📈 Pace Trend Analysis", icon: "📈", q: () => buildContext() + "Analyze my recent pace trend and aerobic efficiency. Am I improving? What does the data say?" },
+    { label: "🎯 Sub-1:50 Check", icon: "🎯", q: () => buildContext() + "Based on my current fitness data, am I on track for a sub-1:50 half marathon? What's my realistic timeline and what needs to improve?" },
+    { label: "📅 Next Week's Plan", icon: "📅", q: () => buildContext() + "Design my training plan for next week. Give me a full 7-day schedule with sessions, distances, paces and goals." },
+    { label: "💪 Volume Analysis", icon: "💪", q: () => buildContext() + "Analyze my weekly training volume trends. Is my load appropriate? Any signs of overtraining or undertraining?" },
+    { label: "🌡️ Heat Adaptation", icon: "🌡️", q: () => buildContext() + "How should I adjust my training for Singapore's heat and humidity? What strategies will help me adapt?" },
+    { label: "🔄 Recovery Check", icon: "🔄", q: () => buildContext() + "Evaluate my recovery approach. What should I prioritize to maintain high weekly mileage without injury?" },
+  ];
+
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:20}},
+    // Header card
+    React.createElement("div",{style:{background:"linear-gradient(135deg,#1a2a1a,#0f1f0f)",border:`1px solid ${C.accent}40`,borderRadius:12,padding:"24px",textAlign:"center"}},
+      React.createElement("div",{style:{fontSize:40,marginBottom:8}},"🏃"),
+      React.createElement("h2",{style:{color:C.accent,margin:"0 0 6px",fontSize:18,fontWeight:600}},"AI Running Coach"),
+      React.createElement("p",{style:{color:C.muted,fontSize:13,margin:"0 0 16px",lineHeight:1.5}},
+        "Powered by Claude · Your full Strava profile and training context is sent automatically"
+      ),
+      React.createElement("div",{style:{display:"flex",gap:16,justifyContent:"center",flexWrap:"wrap"}},
+        [{val:totalKm.toFixed(0)+"km",lbl:"Total Distance"},{val:runs.length,lbl:"Total Runs"},{val:(avgPaceSec?secToPace(avgPaceSec):"—")+"/km",lbl:"Avg Pace"}]
+        .map(({val,lbl})=>React.createElement("div",{key:lbl,style:{background:"#ffffff08",borderRadius:8,padding:"8px 16px",minWidth:80}},
+          React.createElement("div",{style:{color:C.accent,fontWeight:700,fontSize:16}}),
+          React.createElement("div",{style:{color:C.text,fontWeight:700,fontSize:16}},val),
+          React.createElement("div",{style:{color:C.muted,fontSize:11,marginTop:2}},lbl)
+        ))
+      )
     ),
-    msgs.length===1&&React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}},
-      suggestions.map(s=>React.createElement("button",{key:s,onClick:()=>setInput(s),style:{...css.btn,fontSize:12,padding:"5px 12px",borderRadius:20}},s))
+    // Custom question
+    React.createElement("div",{style:{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:16}},
+      React.createElement("p",{style:{color:C.text,fontSize:13,fontWeight:500,margin:"0 0 10px"}},"💬 Ask anything about your training"),
+      React.createElement("div",{style:{display:"flex",gap:8}},
+        React.createElement("input",{
+          id:"coach-input",
+          placeholder:"e.g. Why is my HR drifting on long runs?",
+          style:{...css.inp,flex:1,fontSize:13}
+        }),
+        React.createElement("button",{
+          onClick:()=>{
+            const val=document.getElementById("coach-input").value.trim();
+            if(val) openClaude(buildContext()+val);
+          },
+          style:{...css.btnAccent,whiteSpace:"nowrap"}
+        },"Ask Claude ↗")
+      )
     ),
-    React.createElement("div",{style:{display:"flex",gap:8,borderTop:`1px solid ${C.border}`,paddingTop:10}},
-      React.createElement("input",{value:input,onChange:e=>setInput(e.target.value),onKeyDown:e=>e.key==="Enter"&&send(),placeholder:"Ask your coach…",style:{...css.inp,flex:1}}),
-      React.createElement("button",{onClick:send,disabled:loading,style:{...css.btnAccent,opacity:loading?0.6:1}},"Send")
+    // Quick prompts grid
+    React.createElement("div",null,
+      React.createElement("p",{style:{color:C.muted,fontSize:12,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"0.05em"}},"Quick Prompts"),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:8}},
+        quickPrompts.map(({label,q})=>React.createElement("button",{
+          key:label,
+          onClick:()=>openClaude(q()),
+          style:{...css.btn,textAlign:"left",padding:"12px 14px",borderRadius:10,fontSize:13,lineHeight:1.4,display:"flex",alignItems:"center",gap:8,justifyContent:"space-between"}
+        },
+          React.createElement("span",null,label),
+          React.createElement("span",{style:{color:C.muted,fontSize:11}},"↗")
+        ))
+      )
+    ),
+    // Info note
+    React.createElement("div",{style:{background:"#ffffff06",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",display:"flex",gap:10,alignItems:"flex-start"}},
+      React.createElement("span",{style:{fontSize:14}},"ℹ️"),
+      React.createElement("p",{style:{color:C.muted,fontSize:12,margin:0,lineHeight:1.5}},
+        "Each button opens Claude.ai in a new tab with your full training context pre-loaded — VO2max, recent runs, pace data, goals and more. No API key needed."
+      )
     )
   );
 }
